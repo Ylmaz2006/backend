@@ -36,23 +36,9 @@ mongoose.connect(process.env.MONGO_URL, {
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // CORS Setup
-const allowedOrigins = [
-  'https://yumuu-v5br.vercel.app',
-  'http://localhost:3000'
-];
-
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS not allowed'), false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 204,
+  origin:[ 'https://yumuu.onrender.com']
 }));
-
-app.options('*', cors()); // Preflight support
 
 app.use(bodyParser.json());
 

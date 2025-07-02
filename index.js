@@ -9,61 +9,63 @@ const Stripe = require('stripe');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 
-console.log('Private Key:', process.env.FIREBASE_PRIVATE_KEY.slice(0, 50), '...');
+const app = express();
+const PORT = process.env.PORT || 5000;
 
-// Initialize Firebase Admin
+// Log part of the private key for debug
+console.log('Private Key:', process.env.FIREBASE_PRIVATE_KEY?.slice(0, 30), '...');
+
+// Firebase Admin Init
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
   }),
 });
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-const MONGO_URI = process.env.MONGO_URL;
-mongoose.connect(MONGO_URI, {
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
 .then(() => console.log('✅ MongoDB connected'))
-.catch(err => console.error('❌ MongoDB connection error:', err));
+.catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// CORS
+// Stripe Init
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
+// CORS Setup
 const allowedOrigins = [
   'https://yumuu-v5br.vercel.app',
   'http://localhost:3000'
 ];
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error('CORS not allowed'), false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    optionsSuccessStatus: 204
-  })
-);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS not allowed'), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 204,
+}));
 
-// Allow preflight requests
-app.options('*', cors());
+app.options('*', cors()); // Preflight support
 
-// Nodemailer
+app.use(bodyParser.json());
+
+// Nodemailer Transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
-// Mongoose User schema
+// Mongoose Schema
 const userSchema = new mongoose.Schema({
   username: String,
   email: { type: String, required: true, unique: true },
@@ -72,11 +74,11 @@ const userSchema = new mongoose.Schema({
   isVerified: { type: Boolean, default: false },
   verificationToken: String,
   lastPaymentIntentId: String,
-  paymentStatus: { type: String, default: 'Free' }
+  paymentStatus: { type: String, default: 'Free' },
 });
 const User = mongoose.model('User', userSchema);
 
-// Routes
+// === ROUTES ===
 
 app.post('/signup', async (req, res) => {
   const { email, password, paymentIntentId } = req.body;
@@ -87,17 +89,15 @@ app.post('/signup', async (req, res) => {
     const customer = await stripe.customers.create({ email });
     const hashedPassword = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(32).toString('hex');
-    const defaultUsername = email.split('@')[0];
-
     const newUser = new User({
-      username: defaultUsername,
+      username: email.split('@')[0],
       email,
       password: hashedPassword,
       stripeCustomerId: customer.id,
       verificationToken,
       isVerified: false,
       paymentStatus: paymentIntentId ? 'Premium' : 'Free',
-      lastPaymentIntentId: paymentIntentId || undefined
+      lastPaymentIntentId: paymentIntentId || undefined,
     });
 
     await newUser.save();
@@ -107,7 +107,7 @@ app.post('/signup', async (req, res) => {
       from: `AI App <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Verify Your Email',
-      html: `<p>Click to verify: <a href="${verifyUrl}">${verifyUrl}</a></p>`
+      html: `<p>Click to verify: <a href="${verifyUrl}">${verifyUrl}</a></p>`,
     });
 
     res.status(200).json({ message: 'Signup successful, please verify your email' });
@@ -152,32 +152,28 @@ app.post('/google-login', async (req, res) => {
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     const { email } = decodedToken;
-    let isNewUser = false;
 
     let user = await User.findOne({ email });
+    let isNewUser = false;
 
     if (!user) {
       isNewUser = true;
       const customer = await stripe.customers.create({ email });
-      const defaultUsername = email.split('@')[0];
-
       user = new User({
         email,
-        username: defaultUsername,
+        username: email.split('@')[0],
         stripeCustomerId: customer.id,
         isVerified: true,
-        paymentStatus: 'Free'
+        paymentStatus: 'Free',
       });
-
       await user.save();
     }
 
     res.status(200).json({
       message: 'Google login successful',
       email: user.email,
-      isNewUser
+      isNewUser,
     });
-
   } catch (err) {
     console.error("Google Login Error:", err);
     res.status(401).json({ message: 'Google login failed' });
@@ -212,12 +208,12 @@ app.post('/create-payment-intent', async (req, res) => {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: 1000,
       currency: 'usd',
-      automatic_payment_methods: { enabled: true }
+      automatic_payment_methods: { enabled: true },
     });
     res.send({ clientSecret: paymentIntent.client_secret });
   } catch (e) {
     console.error("Error creating payment intent:", e);
-    return res.status(400).send({ error: { message: e.message } });
+    res.status(400).send({ error: { message: e.message } });
   }
 });
 
@@ -238,6 +234,7 @@ app.post('/complete-checkout', async (req, res) => {
   }
 });
 
+// Start Server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend running at http://0.0.0.0:${PORT}`);
 });

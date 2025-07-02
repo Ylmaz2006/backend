@@ -33,24 +33,9 @@ mongoose.connect(MONGO_URI, {
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
 // CORS
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://yumu2-91939.web.app',
-  'https://yumu2-91939.firebaseapp.com'
-];
-
 app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error('CORS not allowed'), false);
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 204
+  origin: 'http://localhost:3000'
 }));
-
-app.options('*', cors());
 app.use(bodyParser.json());
 
 // Nodemailer

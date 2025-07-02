@@ -34,6 +34,9 @@ mongoose.connect(MONGO_URI, {
 
 // CORS
 app.use(cors({
+  origin: 'https://yumuu-v5br.vercel.app'
+}));
+app.use(cors({
   origin: 'http://localhost:3000'
 }));
 app.use(bodyParser.json());

@@ -33,13 +33,26 @@ mongoose.connect(MONGO_URI, {
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
 // CORS
-app.use(cors({
-  origin: 'https://yumuu-v5br.vercel.app'
-}));
-app.use(cors({
-  origin: 'http://localhost:3000'
-}));
-app.use(bodyParser.json());
+const allowedOrigins = [
+  'https://yumuu-v5br.vercel.app',
+  'http://localhost:3000'
+];
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error('CORS not allowed'), false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 204
+  })
+);
+
+// Allow preflight requests
+app.options('*', cors());
 
 // Nodemailer
 const transporter = nodemailer.createTransport({

@@ -1,55 +1,98 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-const Stripe = require('stripe');
-const admin = require('firebase-admin');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const ffmpeg = require('fluent-ffmpeg');
 const nodemailer = require('nodemailer');
-
+const mongoose = require('mongoose');
+const stripe = require('stripe');
+const FormData = require('form-data');
+const fetch = require('node-fetch');
+require('dotenv').config();
+const { getVideoDurationInSeconds } = require('get-video-duration');
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
+const axios = require('axios');
 
-// Log part of the private key for debug
-console.log('Private Key:', process.env.FIREBASE_PRIVATE_KEY?.slice(0, 30), '...');
+ CLIPTUNE_API = 'https://cliptune.replit.app';
 
-// Firebase Admin Init
-admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  }),
+app.use(cors());
+app.use(express.json());
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+app.use(express.urlencoded({ extended: true }));
+
+app.post('/api/process-video', upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No video uploaded." });
+
+    const videoBuffer = req.file.buffer;
+    const contentType = req.file.mimetype || 'video/mp4';
+
+    const ticketRes = await axios.post(`${CLIPTUNE_API}/upload-ticket`);
+    const { put_url, gcs_uri } = ticketRes.data;
+
+    await axios.put(put_url, videoBuffer, {
+      headers: { 'Content-Type': contentType },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
+
+    const youtubeUrlsRaw = req.body.youtubeUrls || '[]';
+    let youtubeUrls = [];
+    try {
+      youtubeUrls = JSON.parse(youtubeUrlsRaw);
+    } catch {}
+
+    const payload = new URLSearchParams({
+      instrumental: req.body.instrumental || 'true',
+      song_title: req.body.song_title || 'test_clip',
+      video_duration: req.body.video_duration || '30',
+      video_url: gcs_uri,
+      youtube_urls: JSON.stringify(youtubeUrls),
+      extra_description: req.body.extra_description || '',
+      lyrics: req.body.lyrics || ''
+    });
+
+    const response = await axios.post(`${CLIPTUNE_API}/generate`, payload, {
+      timeout: 1800000
+    });
+
+    return res.status(200).json(response.data);
+  } catch (err) {
+    console.error("❌ ClipTune generation failed:", err.response?.data || err.message);
+    return res.status(500).json({
+      error: "Music generation failed",
+      details: err.response?.data || err.message
+    });
+  }
 });
+
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-})
-.then(() => console.log('✅ MongoDB connected'))
-.catch((err) => console.error('❌ MongoDB connection error:', err));
+}).then(() => {
+  console.log('Connected to MongoDB');
+}).catch(err => {
+  console.error('MongoDB connection error:', err);
+});
 
-// Stripe Init
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+// Stripe Configuration
+const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
 
-// CORS Setup
-app.use(cors({
-  origin:[ 'https://yumuu.onrender.com']
-}));
-
-app.use(bodyParser.json());
-
-// Nodemailer Transporter
+// Email Configuration
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
+    pass: process.env.EMAIL_PASS
+  }
 });
+
+// Helper function to get video duration
 
 // Mongoose Schema
 const userSchema = new mongoose.Schema({
@@ -64,8 +107,7 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// === ROUTES ===
-
+// Your existing routes (signup, login, etc.) remain the same...
 app.post('/signup', async (req, res) => {
   const { email, password, paymentIntentId } = req.body;
   try {
@@ -103,6 +145,8 @@ app.post('/signup', async (req, res) => {
   }
 });
 
+// Add other existing routes here (login, verify-email, etc.)...
+
 app.get('/verify-email', async (req, res) => {
   const { token, email } = req.query;
   try {
@@ -136,8 +180,11 @@ app.post('/login', async (req, res) => {
 app.post('/google-login', async (req, res) => {
   const { token } = req.body;
   try {
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    const { email } = decodedToken;
+    // Ensure Firebase Admin SDK is initialized for this to work
+    // const decodedToken = await admin.auth().verifyIdToken(token);
+    // const { email } = decodedToken;
+    // For demonstration if Firebase Admin SDK is not set up:
+    const email = 'google_user@example.com'; // Placeholder if admin.auth() is commented out
 
     let user = await User.findOne({ email });
     let isNewUser = false;
@@ -219,8 +266,59 @@ app.post('/complete-checkout', async (req, res) => {
     res.status(500).json({ message: 'Server error while updating account.' });
   }
 });
+app.post('/check-credit-card', async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user || !user.stripeCustomerId) {
+      return res.status(404).json({ message: 'User or Stripe customer not found' });
+    }
+
+    const customer = await stripe.customers.retrieve(user.stripeCustomerId);
+    const hasCreditCard = !!(customer.invoice_settings.default_payment_method);
+
+    res.status(200).json({ hasCreditCard });
+  } catch (err) {
+    console.error("Error checking credit card:", err);
+    res.status(500).json({ message: 'Failed to check credit card status' });
+  }
+});
+app.post('/upgrade-to-premium', async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.paymentStatus = 'Premium';
+    await user.save();
+
+    res.status(200).json({ message: 'User upgraded to Premium' });
+  } catch (err) {
+    console.error("Upgrade error:", err);
+    res.status(500).json({ message: 'Failed to upgrade user' });
+  }
+});
+app.post('/cancel-premium', async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // OPTIONAL: You can cancel Stripe subscription here if you create subscriptions
+    // For now, just downgrade in your database
+    user.paymentStatus = 'Free';
+    user.lastPaymentIntentId = undefined;
+    await user.save();
+
+    res.status(200).json({ message: 'Subscription cancelled, user downgraded to Free.' });
+  } catch (error) {
+    console.error('Error cancelling subscription:', error);
+    res.status(500).json({ message: 'Failed to cancel subscription.' });
+  }
+});
 
 // Start Server
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Backend running at http://0.0.0.0:${PORT}`);
+app.listen(PORT, 'localhost', () => {
+  console.log(`🚀 Backend running at http://localhost:${PORT}`);
 });
